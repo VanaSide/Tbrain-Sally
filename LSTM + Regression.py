@@ -58,8 +58,8 @@ def display_scores(scores):
 merge_data('TrainingData','merged_data.csv')'''
 # DataName = os.getcwd()+'\ExampleTrainData(AVG)\AvgDATA_07.csv'
 # data = pd.read_csv(DataName, encoding='utf-8')
-merge_data('ExampleTrainData(AVG)','merged_data.csv')
-DataName = os.getcwd()+'\merged_data.csv'
+merge_data('ExampleTrainData(AVG)','merged_data_ExampleTrainData(AVG).csv')
+DataName = os.getcwd()+'\merged_data_ExampleTrainData(AVG).csv'
 SourceData = pd.read_csv(DataName, encoding='utf-8')
 SourceData = transform_data(SourceData)
 
@@ -134,8 +134,8 @@ joblib.dump(final_reg_model, 'WheatherRegression_'+NowDateTime)
 #%%
 '''預測數據'''
 #載入模型
-regressor = joblib.load('WheatherLSTM_2024-10-31T18_26_56Z.h5')
-Regression = joblib.load('WheatherRegression_2024-10-31T18_26_56Z')
+regressor = joblib.load('WheatherLSTM_2024-11-18T17_53_04Z.h5')
+Regression = joblib.load('WheatherRegression_2024-11-18T17_53_04Z')
 
 DataName = os.getcwd()+r'\ExampleTestData\upload.csv'
 test_set = pd.read_csv(DataName, encoding='utf-8')
@@ -198,7 +198,7 @@ while(count < len(EXquestion)):
 df = pd.DataFrame(PredictPower, columns=['答案'])
 
 # 將 DataFrame 寫入 CSV 檔案
-df.to_csv('output.csv', index=False) 
+df.to_csv('output_'+NowDateTime+'.csv', index=False) 
 print('Output CSV File Saved')
 
 '''
@@ -252,3 +252,6 @@ for model_name, mae in model_results.items():
     print(f"{model_name} MAE: {mae}")
 '''
 # %%
+actual = test_set['答案'].values
+predict = df['答案'].values
+ae = sum(abs(predict-actual))

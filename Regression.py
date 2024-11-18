@@ -4,12 +4,11 @@ import numpy as np
 import os
 import glob
 import joblib
-from sklearn.model_selection import StratifiedShuffleSplit, GridSearchCV, ValidationCurveDisplay
+from sklearn.model_selection import GridSearchCV, ValidationCurveDisplay
 from sklearn.linear_model import LinearRegression
 from sklearn.tree import DecisionTreeRegressor
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.svm import SVR
-from sklearn.metrics import mean_absolute_error
 
 #%%
 def merge_data(folder,output_file, file_pattern='*.csv'):
@@ -25,7 +24,7 @@ def merge_data(folder,output_file, file_pattern='*.csv'):
     print(f"合併完成，檔案儲存為{output_file}")
 
 def transform_data(data):
-    '''日照 Sunlight(Lux)'''
+    # 日照 Sunlight(Lux)
     data_sun = data[data['Sunlight(Lux)'] < 117758.2]
     X = data_sun[['Sunlight(Lux)']]
     y = data_sun[['Power(mW)']]
@@ -36,17 +35,17 @@ def transform_data(data):
         # 根據回歸方程反推光照度
         return (power_value - model.intercept_[0]) / (model.coef_[0][0])
     data.loc[data['Sunlight(Lux)'] >= 117758.2, 'Sunlight(Lux)'] = data.loc[data['Sunlight(Lux)'] >= 117758.2, 'Power(mW)'].apply(lambda x: predict_lux(x, model))
-    '''Temperature(°C) : 適當區間為10-35°C'''
+    # Temperature(°C) : 適當區間為10-35°C
     data.loc[data['Temperature(°C)'] < 10, 'Temperature(°C)'] = 10
     data.loc[data['Temperature(°C)'] > 35, 'Temperature(°C)'] = 35
-    '''Humidity(%) : 適當區間 20-100% '''
+    # Humidity(%) : 適當區間 20-100% 
     data.loc[data['Humidity(%)'] < 20, 'Humidity(%)'] = 20
     data.loc[data['Humidity(%)'] > 100, 'Humidity(%)'] = 100
-    '''Pressure(hpa) : 大於1013.25不合理'''
+    # Pressure(hpa) : 大於1013.25不合理
     data.loc[data['Pressure(hpa)'] > 1013.25, 'Pressure(hpa)'] = 1013.25
-    '''WindSpeed(m/s) : 不參考'''
-    data.drop(columns=['WindSpeed(m/s)'], inplace=True)
-    '''時間 : 1. 使用 Grouper 按每 10 分鐘進行分組，並對其他欄位進行平均
+    # WindSpeed(m/s) : 不參考
+    # data.drop(columns=['WindSpeed(m/s)'], inplace=True)
+    ''' 時間 : 1. 使用 Grouper 按每 10 分鐘進行分組，並對其他欄位進行平均
     2. 取 9:00 - 16:59 的資料
     3. 新增季、月、日、時間段、時間欄位'''
     data['DateTime'] = pd.to_datetime(data['DateTime'])
@@ -54,6 +53,7 @@ def transform_data(data):
     [pd.Grouper(freq='10min'), 'LocationCode']
     ).mean().reset_index()
     data_filtered = data_group[(data_group['DateTime'].dt.hour>=9) & (data_group['DateTime'].dt.hour<17)]
+    '''
     data_filtered = data_filtered.copy()
     data_filtered.loc[:, 'Quarter'] = data_filtered['DateTime'].dt.quarter
     data_filtered.loc[:, 'Month'] = data_filtered['DateTime'].dt.month
@@ -67,8 +67,10 @@ def transform_data(data):
             return 3
     # 新增時間段欄位 : 假設白天、下午、傍晚這三個時段對太陽能發電有顯著的不同。
     data_filtered.loc[:, 'TimeOfDay'] = data_filtered['DateTime'].dt.hour.apply(time_of_day)
-    data_filtered.loc[:, 'Hour'] = data_filtered['DateTime'].dt.hour
+    data_filtered.loc[:, 'Hour'] = data_filtered['DateTime'].dt.hour'''
     data_filtered.loc[:, 'DateTimeString'] = data_filtered['DateTime'].dt.strftime('%Y%m%d%H%M')
+    data_filtered.loc[:, 'LocationCode'] = data_filtered['LocationCode'].apply(lambda x : ('0'+ str(x)) if x < 10 else str(x))
+    data_filtered.loc[:, 'Serial'] = data_filtered['DateTimeString'] + data_filtered['LocationCode']
     return data_filtered
 
 def display_scores(scores):
@@ -78,18 +80,24 @@ def display_scores(scores):
 #%%
 merge_data('TrainingData','merged_data.csv')
 data = pd.read_csv('merged_data.csv')
+data = transform_data(data)
 DataName = os.getcwd()+r'\ExampleTestData\upload.csv'
-test_set = pd.read_csv(DataName, encoding='utf-8')
+DataSource = pd.read_csv(DataName, encoding='utf-8')
 target = ['序號']
-EXquestion = test_set[target].values
-# 根據地點分層抽樣切分訓練集與測試集
+EXquestion = DataSource[target].values
+EXquestion_list = EXquestion.flatten().tolist()
+EXquestion_list = [str(i) for i in EXquestion_list]
+# 根據題目提供的測試集切分資料
+test_set = data[data['Serial'].isin(EXquestion_list)]
+train_set = data[~data['Serial'].isin(EXquestion_list)]
+'''根據地點分層抽樣切分訓練集與測試集
 split = StratifiedShuffleSplit(n_splits=1, test_size=0.2, random_state=123)
 for train_index, test_index in split.split(data, data["LocationCode"]):
   train_set = data.loc[train_index]
   test_set = data.loc[test_index]
 train_set = transform_data(train_set) 
-test_set = transform_data(test_set) 
-train_set_X = train_set.drop(['DateTime','DateTimeString',"Power(mW)"],axis=1)
+test_set = transform_data(test_set) '''
+train_set_X = train_set.drop(['DateTime','DateTimeString',"Power(mW)","LocationCode","Serial"],axis=1)
 train_set_Y = train_set["Power(mW)"].copy()
 
 #%%
@@ -114,15 +122,25 @@ param_grid = [{'criterion' :  ['squared_error', 'absolute_error'],
 grid_search = GridSearchCV(tree_reg, param_grid, cv=5, scoring='neg_mean_absolute_error', n_jobs=-1)
 grid_search.fit(train_set_X, train_set_Y)
 final_model = grid_search.best_estimator_
-test_set_X = test_set.drop(['DateTime','DateTimeString',"Power(mW)"],axis=1)
-test_set_Y = test_set["Power(mW)"].copy()
-final_prediction = final_model.predict(test_set_X)
-final_ae = mean_absolute_error(test_set_Y, final_prediction)
-model_results = pd.DataFrame(columns=['model_name & best_params','mae'])
-model_results.loc[1] = [final_model,final_ae]
-print(model_results)
 # 儲存模型
-joblib.dump(final_model, 'DecisionTree')
+from datetime import datetime
+NowDateTime = datetime.now().strftime("%Y-%m-%dT%H_%M_%SZ")
+joblib.dump(final_model, 'DecisionTree_'+NowDateTime+'.h5')
+
+#%%
+'''預測數據'''
+Regression =  joblib.load('DecisionTree_2024-11-18T16_29_49Z.h5')
+test_set_X = test_set.drop(['DateTime','DateTimeString',"Power(mW)","LocationCode","Serial"],axis=1)
+test_set_Y = test_set["Power(mW)"].copy()
+final_prediction = Regression.predict(test_set_X)
+final_ae = sum(abs(test_set_Y-final_prediction))
+model_results = pd.DataFrame(columns=['model_name & best_params','ae'])
+model_results.loc[1] = [Regression,final_ae]
+print(model_results)
+#寫預測結果寫成新的CSV檔案
+df = pd.DataFrame(final_prediction, columns=['答案'])
+df.to_csv('output_'+NowDateTime+'.csv', index=False) 
+print('Output CSV File Saved')
 
 '''最佳超參數 & 最佳模型 : 在伺服器上跑
 1. 定義模型及其參數網格
@@ -167,3 +185,4 @@ print(f"最佳模型: {best_model_name}, MAE: {best_mae}")
 for model_name, mae in model_results.items():
     print(f"{model_name} MAE: {mae}")
 '''
+# %%
