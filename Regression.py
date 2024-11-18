@@ -76,8 +76,12 @@ def display_scores(scores):
     print("Standard deviation:",scores.std())
 
 #%%
-# merge_data('TrainingData','merged_data.csv')
-data = pd.read_csv('TrainingData/L7_Train.csv')
+merge_data('TrainingData','merged_data.csv')
+data = pd.read_csv('merged_data.csv')
+DataName = os.getcwd()+r'\ExampleTestData\upload.csv'
+test_set = pd.read_csv(DataName, encoding='utf-8')
+target = ['序號']
+EXquestion = test_set[target].values
 # 根據地點分層抽樣切分訓練集與測試集
 split = StratifiedShuffleSplit(n_splits=1, test_size=0.2, random_state=123)
 for train_index, test_index in split.split(data, data["LocationCode"]):

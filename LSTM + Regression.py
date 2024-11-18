@@ -4,6 +4,7 @@ import numpy as np
 import os
 import glob
 import joblib
+from sklearn.preprocessing import MinMaxScaler
 from sklearn.model_selection import train_test_split, GridSearchCV, ValidationCurveDisplay
 from sklearn.linear_model import LinearRegression
 from sklearn.tree import DecisionTreeRegressor
@@ -55,20 +56,35 @@ def display_scores(scores):
 #%%
 '''載入訓練資料
 merge_data('TrainingData','merged_data.csv')'''
-DataName = os.getcwd()+'\ExampleTrainData(AVG)\AvgDATA_07.csv'
-data = pd.read_csv(DataName, encoding='utf-8')
-# 根據地點分層抽樣切分訓練集與測試集
-TrainData = transform_data(data) 
-TrainData_X = TrainData[['WindSpeed(m/s)','Pressure(hpa)','Temperature(°C)','Humidity(%)','Sunlight(Lux)']].values
-TrainData_Y = TrainData["Power(mW)"].copy()
+# DataName = os.getcwd()+'\ExampleTrainData(AVG)\AvgDATA_07.csv'
+# data = pd.read_csv(DataName, encoding='utf-8')
+merge_data('ExampleTrainData(AVG)','merged_data.csv')
+DataName = os.getcwd()+'\merged_data.csv'
+SourceData = pd.read_csv(DataName, encoding='utf-8')
+SourceData = transform_data(SourceData)
+
+#迴歸分析 選擇要留下來的資料欄位
+#(風速,大氣壓力,溫度,濕度,光照度)
+#(發電量)
+Regression_X_train = SourceData[['WindSpeed(m/s)','Pressure(hpa)','Temperature(°C)','Humidity(%)','Sunlight(Lux)']].values
+Regression_y_train = SourceData[['Power(mW)']].values
+
+#LSTM 選擇要留下來的資料欄位
+#(風速,大氣壓力,溫度,濕度,光照度)
+AllOutPut = SourceData[['WindSpeed(m/s)','Pressure(hpa)','Temperature(°C)','Humidity(%)','Sunlight(Lux)']].values
+
+#正規化
+LSTM_MinMaxModel = MinMaxScaler().fit(AllOutPut)
+AllOutPut_MinMax = LSTM_MinMaxModel.transform(AllOutPut)
+
 X_train = []
 y_train = []
 # 設定LSTM往前看的筆數和預測筆數
 LookBackNum = 12 # LSTM往前看的筆數
 ForecastNum = 48 # 預測筆數
-for i in range(LookBackNum, len(TrainData_X)):
-    X_train.append(TrainData_X[i-LookBackNum:i, :])
-    y_train.append(TrainData_X[i, :])
+for i in range(LookBackNum, len(AllOutPut_MinMax)):
+    X_train.append(AllOutPut_MinMax[i-LookBackNum:i, :])
+    y_train.append(AllOutPut_MinMax[i, :])
 X_train = np.array(X_train)
 y_train = np.array(y_train)
 #(samples 是訓練樣本數量,timesteps 是每個樣本的時間步長,features 是每個時間步的特徵數量)
@@ -77,21 +93,19 @@ X_train = np.reshape(X_train,(X_train.shape [0], X_train.shape [1], 5))
 #%%
 '''LSTM Model
 '''
-lstm = Sequential()
-lstm.add(LSTM(units = 128, return_sequences = True, input_shape = (X_train.shape[1], 5)))
-lstm.add(LSTM(units = 64))
-lstm.add(Dropout(0.2))
+regressor = Sequential()
+regressor.add(LSTM(units = 128, return_sequences = True, input_shape = (X_train.shape[1], 5)))
+regressor.add(LSTM(units = 64))
+regressor.add(Dropout(0.2))
 # output layer
-lstm.add(Dense(units = 5))
-lstm.compile(optimizer = 'adam', loss = 'mean_squared_error')
+regressor.add(Dense(units = 5))
+regressor.compile(optimizer = 'adam', loss = 'mean_squared_error')
 #開始訓練
-lstm.fit(X_train, y_train, epochs = 100, batch_size = 128)
+regressor.fit(X_train, y_train, epochs = 100, batch_size = 128)
 #保存模型
 from datetime import datetime
 NowDateTime = datetime.now().strftime("%Y-%m-%dT%H_%M_%SZ")
-lstm.save('WheatherLSTM_'+NowDateTime+'.h5')
-print('Model Saved')
-
+joblib.dump(regressor, 'WheatherLSTM_'+NowDateTime+'.h5')
 #%%
 '''Regression Model
 1. 透過ValidationCurveDisplay判斷超參數預測比較好的區間
@@ -108,17 +122,21 @@ params = grid_search.cv_results_['params']
 for mean, params in zip(means,params):
     print("%f with: %r " % (mean,params))
 '''
-tree_reg = DecisionTreeRegressor()
-param_grid = [{'criterion' :  ['squared_error', 'absolute_error'],
+RegressionModel = DecisionTreeRegressor()
+param_grid = [{'criterion' :  ['absolute_error'],
                'max_depth' : [3,10,30]}]
-grid_search = GridSearchCV(tree_reg, param_grid, cv=5, scoring='neg_mean_absolute_error', n_jobs=-1)
-grid_search.fit(TrainData_X, TrainData_Y)
+grid_search = GridSearchCV(RegressionModel, param_grid, cv=5, scoring='neg_mean_absolute_error', n_jobs=-1)
+grid_search.fit(LSTM_MinMaxModel.transform(Regression_X_train), Regression_y_train)
 final_reg_model = grid_search.best_estimator_
 # 儲存模型
-joblib.dump(final_reg_model, 'DecisionTree'+NowDateTime+'.h5')
+joblib.dump(final_reg_model, 'WheatherRegression_'+NowDateTime)
 
 #%%
 '''預測數據'''
+#載入模型
+regressor = joblib.load('WheatherLSTM_2024-10-31T18_26_56Z.h5')
+Regression = joblib.load('WheatherRegression_2024-10-31T18_26_56Z')
+
 DataName = os.getcwd()+r'\ExampleTestData\upload.csv'
 test_set = pd.read_csv(DataName, encoding='utf-8')
 target = ['序號']
@@ -138,6 +156,7 @@ while(count < len(EXquestion)):
 
   DataName = os.getcwd()+'\ExampleTrainData(IncompleteAVG)\IncompleteAvgDATA_'+ strLocationCode +'.csv'
   SourceData = pd.read_csv(DataName, encoding='utf-8')
+  SourceData = transform_data(SourceData)
   ReferTitle = SourceData[['Serial']].values
   ReferData = SourceData[['WindSpeed(m/s)','Pressure(hpa)','Temperature(°C)','Humidity(%)','Sunlight(Lux)']].values
   
@@ -147,7 +166,6 @@ while(count < len(EXquestion)):
   for DaysCount in range(len(ReferTitle)):
     if(str(int(ReferTitle[DaysCount]))[:8] == str(int(EXquestion[count]))[:8]):
       TempData = ReferData[DaysCount].reshape(1,-1)
-      # TempData = transform_data(TempData) 得思考資料轉換的部分
       inputs.append(TempData)
 
   #用迴圈不斷使新的預測值塞入參考資料，並預測下一筆資料
@@ -167,9 +185,9 @@ while(count < len(EXquestion)):
     NewTest = np.array(X_test)
     NewTest = np.reshape(NewTest, (NewTest.shape[0], NewTest.shape[1], 5))
     
-    predicted = lstm.predict(NewTest)
+    predicted = regressor.predict(NewTest)
     PredictOutput.append(predicted)
-    PredictPower.append(np.round(final_reg_model.predict(predicted),2).flatten())
+    PredictPower.append(np.round(Regression.predict(predicted),2).flatten())
   
   #每次預測都要預測48個，因此加48個會切到下一天
   #0~47,48~95,96~143...
