@@ -17,8 +17,6 @@ from tensorflow.keras.layers import Dense, LSTM, Dropout
 #%%
 def merge_data(folder,output_file, file_pattern='*.csv'):
     csv_files = glob.glob(os.path.join(folder,file_pattern))
-    if len(csv_files) != 17:
-        print(f"警告：找到 {len(csv_files)} 個 CSV 檔案，預期需要 17 個。請檢查資料夾。")
     dataframes = []
     for file in csv_files:
         df = pd.read_csv(file)
@@ -28,7 +26,7 @@ def merge_data(folder,output_file, file_pattern='*.csv'):
     print(f"合併完成，檔案儲存為{output_file}")
 
 def transform_data(data):
-    '''日照 Sunlight(Lux)'''
+    # 日照 Sunlight(Lux)
     data_sun = data[data['Sunlight(Lux)'] < 117758.2]
     X = data_sun[['Sunlight(Lux)']]
     y = data_sun[['Power(mW)']]
@@ -39,15 +37,41 @@ def transform_data(data):
         # 根據回歸方程反推光照度
         return (power_value - model.intercept_[0]) / (model.coef_[0][0])
     data.loc[data['Sunlight(Lux)'] >= 117758.2, 'Sunlight(Lux)'] = data.loc[data['Sunlight(Lux)'] >= 117758.2, 'Power(mW)'].apply(lambda x: predict_lux(x, model))
-    '''Temperature(°C) : 適當區間為10-35°C'''
+    # Temperature(°C) : 適當區間為10-35°C
     data.loc[data['Temperature(°C)'] < 10, 'Temperature(°C)'] = 10
     data.loc[data['Temperature(°C)'] > 35, 'Temperature(°C)'] = 35
-    '''Humidity(%) : 適當區間 20-100% '''
+    # Humidity(%) : 適當區間 20-100% 
     data.loc[data['Humidity(%)'] < 20, 'Humidity(%)'] = 20
     data.loc[data['Humidity(%)'] > 100, 'Humidity(%)'] = 100
-    '''Pressure(hpa) : 大於1013.25不合理'''
+    # Pressure(hpa) : 大於1013.25不合理
     data.loc[data['Pressure(hpa)'] > 1013.25, 'Pressure(hpa)'] = 1013.25
-    return data
+    # WindSpeed(m/s) : 不參考
+    # data.drop(columns=['WindSpeed(m/s)'], inplace=True)
+    ''' 時間 : 1. 使用 Grouper 按每 10 分鐘進行分組，並對其他欄位進行平均
+    2. 新增季、月、日、時間段、時間欄位'''
+    data['DateTime'] = pd.to_datetime(data['DateTime'])
+    data_group = data.set_index('DateTime').groupby(
+    [pd.Grouper(freq='10min'), 'LocationCode']
+    ).mean().reset_index()
+    '''
+    data_filtered = data_filtered.copy()
+    data_filtered.loc[:, 'Quarter'] = data_filtered['DateTime'].dt.quarter
+    data_filtered.loc[:, 'Month'] = data_filtered['DateTime'].dt.month
+    data_filtered.loc[:, 'Day'] = data_filtered['DateTime'].dt.day
+    def time_of_day(hour):
+        if 9 <= hour < 12:
+            return 1
+        elif 12 <= hour < 15:
+            return 2
+        else:
+            return 3
+    # 新增時間段欄位 : 假設白天、下午、傍晚這三個時段對太陽能發電有顯著的不同。
+    data_filtered.loc[:, 'TimeOfDay'] = data_filtered['DateTime'].dt.hour.apply(time_of_day)
+    data_filtered.loc[:, 'Hour'] = data_filtered['DateTime'].dt.hour'''
+    data_group.loc[:, 'DateTimeString'] = data_group['DateTime'].dt.strftime('%Y%m%d%H%M')
+    data_group.loc[:, 'LocationCode'] = data_group['LocationCode'].apply(lambda x : ('0'+ str(x)) if x < 10 else str(x))
+    data_group.loc[:, 'Serial'] = data_group['DateTimeString'] + data_group['LocationCode']
+    return data_group
 
 def display_scores(scores):
     print("Mean:",scores.mean())
@@ -58,20 +82,22 @@ def display_scores(scores):
 merge_data('TrainingData','merged_data.csv')'''
 # DataName = os.getcwd()+'\ExampleTrainData(AVG)\AvgDATA_07.csv'
 # data = pd.read_csv(DataName, encoding='utf-8')
-merge_data('ExampleTrainData(AVG)','merged_data_ExampleTrainData(AVG).csv')
-DataName = os.getcwd()+'\merged_data_ExampleTrainData(AVG).csv'
+merge_data('TrainingData','merged_data_Additional_V2.csv')
+DataName = os.getcwd()+'\merged_data_Additional_V2.csv'
 SourceData = pd.read_csv(DataName, encoding='utf-8')
 SourceData = transform_data(SourceData)
+SourceData_AVG = SourceData[(SourceData ['DateTime'].dt.hour>=9) & (SourceData['DateTime'].dt.hour<17)]
+SourceData_IncompleteAVG = SourceData[(SourceData ['DateTime'].dt.hour<9)]
 
 #迴歸分析 選擇要留下來的資料欄位
 #(風速,大氣壓力,溫度,濕度,光照度)
 #(發電量)
-Regression_X_train = SourceData[['WindSpeed(m/s)','Pressure(hpa)','Temperature(°C)','Humidity(%)','Sunlight(Lux)']].values
-Regression_y_train = SourceData[['Power(mW)']].values
+Regression_X_train = SourceData_AVG[['WindSpeed(m/s)','Pressure(hpa)','Temperature(°C)','Humidity(%)','Sunlight(Lux)']].values
+Regression_y_train = SourceData_AVG[['Power(mW)']].values
 
 #LSTM 選擇要留下來的資料欄位
 #(風速,大氣壓力,溫度,濕度,光照度)
-AllOutPut = SourceData[['WindSpeed(m/s)','Pressure(hpa)','Temperature(°C)','Humidity(%)','Sunlight(Lux)']].values
+AllOutPut = SourceData_AVG[['WindSpeed(m/s)','Pressure(hpa)','Temperature(°C)','Humidity(%)','Sunlight(Lux)']].values
 
 #正規化
 LSTM_MinMaxModel = MinMaxScaler().fit(AllOutPut)
@@ -101,7 +127,7 @@ regressor.add(Dropout(0.2))
 regressor.add(Dense(units = 5))
 regressor.compile(optimizer = 'adam', loss = 'mean_squared_error')
 #開始訓練
-regressor.fit(X_train, y_train, epochs = 100, batch_size = 128)
+regressor.fit(X_train, y_train, epochs = 10, batch_size = 128)
 #保存模型
 from datetime import datetime
 NowDateTime = datetime.now().strftime("%Y-%m-%dT%H_%M_%SZ")
@@ -134,10 +160,10 @@ joblib.dump(final_reg_model, 'WheatherRegression_'+NowDateTime)
 #%%
 '''預測數據'''
 #載入模型
-regressor = joblib.load('WheatherLSTM_2024-11-18T17_53_04Z.h5')
+regressor = joblib.load('WheatherLSTM_2024-11-25T16_54_10Z.h5')
 Regression = joblib.load('WheatherRegression_2024-11-18T17_53_04Z')
 
-DataName = os.getcwd()+r'\ExampleTestData\upload.csv'
+DataName = os.getcwd()+r'\TestData\upload(no answer).csv'
 test_set = pd.read_csv(DataName, encoding='utf-8')
 target = ['序號']
 EXquestion = test_set[target].values
@@ -154,11 +180,8 @@ while(count < len(EXquestion)):
   if LocationCode < 10 :
     strLocationCode = '0'+LocationCode
 
-  DataName = os.getcwd()+'\ExampleTrainData(IncompleteAVG)\IncompleteAvgDATA_'+ strLocationCode +'.csv'
-  SourceData = pd.read_csv(DataName, encoding='utf-8')
-  SourceData = transform_data(SourceData)
-  ReferTitle = SourceData[['Serial']].values
-  ReferData = SourceData[['WindSpeed(m/s)','Pressure(hpa)','Temperature(°C)','Humidity(%)','Sunlight(Lux)']].values
+  ReferTitle = SourceData_IncompleteAVG[['Serial']].values
+  ReferData = SourceData_IncompleteAVG[['WindSpeed(m/s)','Pressure(hpa)','Temperature(°C)','Humidity(%)','Sunlight(Lux)']].values
   
   inputs = []#重置存放參考資料
 
@@ -195,10 +218,10 @@ while(count < len(EXquestion)):
 
 #寫預測結果寫成新的CSV檔案
 # 將陣列轉換為 DataFrame
-df = pd.DataFrame(PredictPower, columns=['答案'])
+df = pd.DataFrame([EXquestion,PredictPower], columns=['序號','答案'])
 
 # 將 DataFrame 寫入 CSV 檔案
-df.to_csv('output_'+NowDateTime+'.csv', index=False) 
+df.to_csv('output_' + NowDateTime + '.csv', index=False, encoding='utf-8', line_terminator='\n') 
 print('Output CSV File Saved')
 
 '''
